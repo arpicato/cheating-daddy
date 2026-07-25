@@ -15,9 +15,24 @@ let hiddenVideo = null;
 let offscreenCanvas = null;
 let offscreenContext = null;
 let currentImageQuality = 'medium'; // Store current image quality for manual screenshots
+const DISPLAY_MEDIA_TIMEOUT_MS = 30000;
 
 const isLinux = process.platform === 'linux';
 const isMacOS = process.platform === 'darwin';
+
+async function getDisplayMediaWithTimeout(constraints) {
+    let timeoutId;
+    try {
+        return await Promise.race([
+            navigator.mediaDevices.getDisplayMedia(constraints),
+            new Promise((resolve, reject) => {
+                timeoutId = setTimeout(() => reject(new Error('Screen selection timed out after 30 seconds')), DISPLAY_MEDIA_TIMEOUT_MS);
+            }),
+        ]);
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
 
 // ============ STORAGE API ============
 // Wrapper for IPC-based storage access
@@ -218,7 +233,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
 
             // Get screen capture for screenshots
-            mediaStream = await navigator.mediaDevices.getDisplayMedia({
+            mediaStream = await getDisplayMediaWithTimeout({
                 video: {
                     frameRate: 1,
                     width: { ideal: 1920 },
@@ -252,7 +267,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             // Linux - use display media for screen capture and try to get system audio
             try {
                 // First try to get system audio via getDisplayMedia (works on newer browsers)
-                mediaStream = await navigator.mediaDevices.getDisplayMedia({
+                mediaStream = await getDisplayMediaWithTimeout({
                     video: {
                         frameRate: 1,
                         width: { ideal: 1920 },
@@ -275,7 +290,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
                 console.warn('System audio via getDisplayMedia failed, trying screen-only capture:', systemAudioError);
 
                 // Fallback to screen-only capture
-                mediaStream = await navigator.mediaDevices.getDisplayMedia({
+                mediaStream = await getDisplayMediaWithTimeout({
                     video: {
                         frameRate: 1,
                         width: { ideal: 1920 },
@@ -313,7 +328,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             console.log('Linux capture started - system audio:', mediaStream.getAudioTracks().length > 0, 'microphone mode:', audioMode);
         } else {
             // Windows - use display media with loopback for system audio
-            mediaStream = await navigator.mediaDevices.getDisplayMedia({
+            mediaStream = await getDisplayMediaWithTimeout({
                 video: {
                     frameRate: 1,
                     width: { ideal: 1920 },
@@ -362,9 +377,12 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 
         // Manual mode only - screenshots captured on demand via shortcut
         console.log('Manual mode enabled - screenshots will be captured on demand only');
+        return true;
     } catch (err) {
         console.error('Error starting capture:', err);
         cheatingDaddy.setStatus('error');
+        cheatingDaddy.addNewResponse(`Screen capture error: ${err.message}`);
+        return false;
     }
 }
 
@@ -616,38 +634,43 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
             qualityValue = 0.7; // Default to medium
     }
 
-    offscreenCanvas.toBlob(
-        async blob => {
-            if (!blob) {
-                console.error('Failed to create blob from canvas');
-                return;
-            }
-
-            const reader = new FileReader();
-            reader.onloadend = async () => {
-                const base64data = reader.result.split(',')[1];
-
-                // Validate base64 data
-                if (!base64data || base64data.length < 100) {
-                    console.error('Invalid base64 data generated');
+    return new Promise(resolve => {
+        offscreenCanvas.toBlob(
+            async blob => {
+                if (!blob) {
+                    console.error('Failed to create blob from canvas');
+                    resolve({ success: false, error: 'Failed to encode screenshot' });
                     return;
                 }
 
-                const result = await ipcRenderer.invoke('send-image-content', {
-                    data: base64data,
-                });
+                const reader = new FileReader();
+                reader.onloadend = async () => {
+                    const base64data = reader.result.split(',')[1];
 
-                if (result.success) {
-                    console.log(`Image sent successfully (${offscreenCanvas.width}x${offscreenCanvas.height})`);
-                } else {
-                    console.error('Failed to send image:', result.error);
-                }
-            };
-            reader.readAsDataURL(blob);
-        },
-        'image/jpeg',
-        qualityValue
-    );
+                    // Validate base64 data
+                    if (!base64data || base64data.length < 100) {
+                        console.error('Invalid base64 data generated');
+                        resolve({ success: false, error: 'Invalid screenshot data' });
+                        return;
+                    }
+
+                    const result = await ipcRenderer.invoke('send-image-content', {
+                        data: base64data,
+                    });
+
+                    if (result.success) {
+                        console.log(`Image sent successfully (${offscreenCanvas.width}x${offscreenCanvas.height})`);
+                    } else {
+                        console.error('Failed to send image:', result.error);
+                    }
+                    resolve(result);
+                };
+                reader.readAsDataURL(blob);
+            },
+            'image/jpeg',
+            qualityValue
+        );
+    });
 }
 
 const MANUAL_SCREENSHOT_PROMPT = `Help me on this page, give me the answer no bs, complete answer.
@@ -661,7 +684,7 @@ async function captureManualScreenshot(imageQuality = null) {
 
     if (!mediaStream) {
         console.error('No media stream available');
-        return;
+        return { success: false, error: 'No media stream available' };
     }
 
     let dimensions;
@@ -670,7 +693,7 @@ async function captureManualScreenshot(imageQuality = null) {
     } catch (error) {
         console.error('Failed to capture manual screenshot:', error);
         cheatingDaddy.addNewResponse(`Screenshot error: ${error.message}`);
-        return;
+        return { success: false, error: error.message };
     }
 
     const { width: destW, height: destH } = dimensions;
@@ -690,43 +713,48 @@ async function captureManualScreenshot(imageQuality = null) {
             qualityValue = 0.6;
     }
 
-    offscreenCanvas.toBlob(
-        async blob => {
-            if (!blob) {
-                console.error('Failed to create blob from canvas');
-                return;
-            }
-
-            const reader = new FileReader();
-            reader.onloadend = async () => {
-                const base64data = reader.result.split(',')[1];
-
-                if (!base64data || base64data.length < 100) {
-                    console.error('Invalid base64 data generated');
+    return new Promise(resolve => {
+        offscreenCanvas.toBlob(
+            async blob => {
+                if (!blob) {
+                    console.error('Failed to create blob from canvas');
+                    resolve({ success: false, error: 'Failed to encode screenshot' });
                     return;
                 }
 
-                console.log(`Sending image: ${destW}x${destH}, ~${Math.round(base64data.length / 1024)}KB`);
+                const reader = new FileReader();
+                reader.onloadend = async () => {
+                    const base64data = reader.result.split(',')[1];
 
-                // Send image with prompt to HTTP API (response streams via IPC events)
-                const result = await ipcRenderer.invoke('send-image-content', {
-                    data: base64data,
-                    prompt: MANUAL_SCREENSHOT_PROMPT,
-                });
+                    if (!base64data || base64data.length < 100) {
+                        console.error('Invalid base64 data generated');
+                        resolve({ success: false, error: 'Invalid screenshot data' });
+                        return;
+                    }
 
-                if (result.success) {
-                    console.log(`Image response completed from ${result.model}`);
-                    // Response already displayed via streaming events (new-response/update-response)
-                } else {
-                    console.error('Failed to get image response:', result.error);
-                    cheatingDaddy.addNewResponse(`Error: ${result.error}`);
-                }
-            };
-            reader.readAsDataURL(blob);
-        },
-        'image/jpeg',
-        qualityValue
-    );
+                    console.log(`Sending image: ${destW}x${destH}, ~${Math.round(base64data.length / 1024)}KB`);
+
+                    // Send image with prompt to HTTP API (response streams via IPC events)
+                    const result = await ipcRenderer.invoke('send-image-content', {
+                        data: base64data,
+                        prompt: MANUAL_SCREENSHOT_PROMPT,
+                    });
+
+                    if (result.success) {
+                        console.log(`Image response completed from ${result.model}`);
+                        // Response already displayed via streaming events (new-response/update-response)
+                    } else {
+                        console.error('Failed to get image response:', result.error);
+                        cheatingDaddy.addNewResponse(`Error: ${result.error}`);
+                    }
+                    resolve(result);
+                };
+                reader.readAsDataURL(blob);
+            },
+            'image/jpeg',
+            qualityValue
+        );
+    });
 }
 
 // Expose functions to global scope for external access

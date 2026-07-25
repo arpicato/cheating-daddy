@@ -33,18 +33,22 @@ function createWindow(sendToRenderer, geminiSessionRef) {
     });
 
     const { session, desktopCapturer } = require('electron');
-    if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) {
-        session.defaultSession.setDisplayMediaRequestHandler(null);
-        console.log('[Screen Capture] KDE system picker handles display-media requests');
-    } else {
-        session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    session.defaultSession.setDisplayMediaRequestHandler(
+        (request, callback) => {
             desktopCapturer.getSources({ types: ['screen'] }).then(sources => {
                 callback({ video: sources[0], audio: 'loopback' });
             });
-        });
-    }
+        },
+        { useSystemPicker: process.platform === 'linux' && Boolean(process.env.WAYLAND_DISPLAY) }
+    );
+    console.log(
+        `[Screen Capture] Display picker: ${process.platform === 'linux' && process.env.WAYLAND_DISPLAY ? 'KDE system picker' : 'Electron source picker'}`
+    );
 
     mainWindow.setContentProtection(true);
+    if (process.platform === 'linux') {
+        console.warn('[Window Protection] Electron cannot guarantee capture exclusion on Linux; setContentProtection is best-effort only');
+    }
     if (process.platform === 'win32') {
         mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
         mainWindow.setAlwaysOnTop(true, 'screen-saver', 1);
