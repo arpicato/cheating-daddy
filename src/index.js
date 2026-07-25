@@ -11,9 +11,8 @@ const geminiSessionRef = { current: null };
 let mainWindow = null;
 
 if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) {
-    app.commandLine.appendSwitch('ozone-platform', 'wayland');
-    app.commandLine.appendSwitch('enable-features', 'UseOzonePlatform,WebRTCPipeWireCapturer');
-    console.log(`[Screen Capture] Native Wayland/PipeWire enabled (${process.env.WAYLAND_DISPLAY})`);
+    app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer');
+    console.log(`[Screen Capture] KDE portal/PipeWire enabled (${process.env.WAYLAND_DISPLAY}); Electron UI remains on XWayland`);
 }
 
 function createMainWindow() {

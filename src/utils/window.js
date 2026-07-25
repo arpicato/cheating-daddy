@@ -10,7 +10,6 @@ const MIN_WINDOW_SIZE = { width: 700, height: 320 };
 function createWindow(sendToRenderer, geminiSessionRef) {
     let windowWidth = DEFAULT_MAIN_WINDOW_SIZE.width;
     let windowHeight = DEFAULT_MAIN_WINDOW_SIZE.height;
-    const isNativeWayland = process.platform === 'linux' && Boolean(process.env.WAYLAND_DISPLAY);
 
     const mainWindow = new BrowserWindow({
         width: windowWidth,
@@ -19,7 +18,7 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         minHeight: MIN_WINDOW_SIZE.height,
         resizable: true,
         frame: false,
-        transparent: !isNativeWayland,
+        transparent: true,
         hasShadow: false,
         alwaysOnTop: process.platform === 'win32',
         webPreferences: {
@@ -30,18 +29,20 @@ function createWindow(sendToRenderer, geminiSessionRef) {
             webSecurity: true,
             allowRunningInsecureContent: false,
         },
-        backgroundColor: isNativeWayland ? '#111111' : '#00000000',
+        backgroundColor: '#00000000',
     });
 
     const { session, desktopCapturer } = require('electron');
-    session.defaultSession.setDisplayMediaRequestHandler(
-        (request, callback) => {
+    if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) {
+        session.defaultSession.setDisplayMediaRequestHandler(null);
+        console.log('[Screen Capture] KDE system picker handles display-media requests');
+    } else {
+        session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
             desktopCapturer.getSources({ types: ['screen'] }).then(sources => {
                 callback({ video: sources[0], audio: 'loopback' });
             });
-        },
-        { useSystemPicker: true }
-    );
+        });
+    }
 
     mainWindow.setContentProtection(true);
     if (process.platform === 'win32') {

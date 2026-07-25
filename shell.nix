@@ -34,5 +34,4 @@ pkgs.mkShell {
         xorg.libxcb
     ]);
 
-    NIXOS_OZONE_WL = "1";
 }
