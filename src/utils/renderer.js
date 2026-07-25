@@ -461,47 +461,111 @@ function setupWindowsLoopbackProcessing() {
     audioProcessor.connect(audioContext.destination);
 }
 
+function isCanvasBlack(canvas) {
+    const sampleWidth = Math.min(canvas.width, 32);
+    const sampleHeight = Math.min(canvas.height, 32);
+    const sampleCanvas = document.createElement('canvas');
+    sampleCanvas.width = sampleWidth;
+    sampleCanvas.height = sampleHeight;
+    const sampleContext = sampleCanvas.getContext('2d', { willReadFrequently: true });
+    sampleContext.drawImage(canvas, 0, 0, sampleWidth, sampleHeight);
+    const pixels = sampleContext.getImageData(0, 0, sampleWidth, sampleHeight).data;
+
+    for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i] > 4 || pixels[i + 1] > 4 || pixels[i + 2] > 4) return false;
+    }
+
+    return true;
+}
+
+async function waitForVideoFrame(video) {
+    if (typeof video.requestVideoFrameCallback === 'function') {
+        await Promise.race([
+            new Promise(resolve => video.requestVideoFrameCallback(() => resolve())),
+            new Promise(resolve => setTimeout(resolve, 1000)),
+        ]);
+        return;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 250));
+}
+
+async function initializeVideoCapture() {
+    if (hiddenVideo) return;
+
+    hiddenVideo = document.createElement('video');
+    hiddenVideo.srcObject = mediaStream;
+    hiddenVideo.muted = true;
+    hiddenVideo.playsInline = true;
+    await hiddenVideo.play();
+
+    if (hiddenVideo.readyState < 2 || hiddenVideo.videoWidth === 0 || hiddenVideo.videoHeight === 0) {
+        await new Promise(resolve => {
+            hiddenVideo.onloadeddata = () => resolve();
+        });
+    }
+
+    offscreenCanvas = document.createElement('canvas');
+    offscreenContext = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+}
+
+async function drawCaptureFrame(maxWidth = null) {
+    await initializeVideoCapture();
+    const videoTrack = mediaStream.getVideoTracks()[0];
+    if (!videoTrack || videoTrack.readyState !== 'live') throw new Error('Screen capture track is not live');
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        let frame = hiddenVideo;
+        let srcW;
+        let srcH;
+        let bitmap = null;
+
+        if (typeof ImageCapture === 'function') {
+            try {
+                bitmap = await new ImageCapture(videoTrack).grabFrame();
+                frame = bitmap;
+            } catch (error) {
+                console.warn(`ImageCapture attempt ${attempt} failed, using video frame:`, error);
+                await waitForVideoFrame(hiddenVideo);
+            }
+        } else {
+            await waitForVideoFrame(hiddenVideo);
+        }
+
+        srcW = frame.width || frame.videoWidth;
+        srcH = frame.height || frame.videoHeight;
+        if (!srcW || !srcH) {
+            bitmap?.close();
+            continue;
+        }
+
+        const scale = maxWidth && srcW > maxWidth ? maxWidth / srcW : 1;
+        const destW = Math.round(srcW * scale);
+        const destH = Math.round(srcH * scale);
+        offscreenCanvas.width = destW;
+        offscreenCanvas.height = destH;
+        offscreenContext.drawImage(frame, 0, 0, destW, destH);
+        bitmap?.close();
+
+        if (!isCanvasBlack(offscreenCanvas)) return { width: destW, height: destH };
+
+        console.warn(`Captured frame ${attempt}/3 is completely black`);
+        await new Promise(resolve => setTimeout(resolve, 250));
+    }
+
+    throw new Error('Screen capture is completely black. Check screen-sharing permission and Electron graphics libraries.');
+}
+
 async function captureScreenshot(imageQuality = 'medium', isManual = false) {
     console.log(`Capturing ${isManual ? 'manual' : 'automated'} screenshot...`);
     if (!mediaStream) return;
 
-    // Lazy init of video element
-    if (!hiddenVideo) {
-        hiddenVideo = document.createElement('video');
-        hiddenVideo.srcObject = mediaStream;
-        hiddenVideo.muted = true;
-        hiddenVideo.playsInline = true;
-        await hiddenVideo.play();
-
-        await new Promise(resolve => {
-            if (hiddenVideo.readyState >= 2) return resolve();
-            hiddenVideo.onloadedmetadata = () => resolve();
-        });
-
-        // Lazy init of canvas based on video dimensions
-        offscreenCanvas = document.createElement('canvas');
-        offscreenCanvas.width = hiddenVideo.videoWidth;
-        offscreenCanvas.height = hiddenVideo.videoHeight;
-        offscreenContext = offscreenCanvas.getContext('2d');
-    }
-
-    // Check if video is ready
-    if (hiddenVideo.readyState < 2) {
-        console.warn('Video not ready yet, skipping screenshot');
+    try {
+        await drawCaptureFrame();
+    } catch (error) {
+        console.error('Failed to capture screenshot:', error);
+        cheatingDaddy.addNewResponse(`Screenshot error: ${error.message}`);
         return;
-    }
-
-    offscreenContext.drawImage(hiddenVideo, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
-
-    // Check if image was drawn properly by sampling a pixel
-    const imageData = offscreenContext.getImageData(0, 0, 1, 1);
-    const isBlank = imageData.data.every((value, index) => {
-        // Check if all pixels are black (0,0,0) or transparent
-        return index === 3 ? true : value === 0;
-    });
-
-    if (isBlank) {
-        console.warn('Screenshot appears to be blank/black');
     }
 
     let qualityValue;
@@ -567,45 +631,16 @@ async function captureManualScreenshot(imageQuality = null) {
         return;
     }
 
-    // Lazy init of video element
-    if (!hiddenVideo) {
-        hiddenVideo = document.createElement('video');
-        hiddenVideo.srcObject = mediaStream;
-        hiddenVideo.muted = true;
-        hiddenVideo.playsInline = true;
-        await hiddenVideo.play();
-
-        await new Promise(resolve => {
-            if (hiddenVideo.readyState >= 2) return resolve();
-            hiddenVideo.onloadedmetadata = () => resolve();
-        });
-
-        // Lazy init of canvas based on video dimensions
-        offscreenCanvas = document.createElement('canvas');
-        offscreenCanvas.width = hiddenVideo.videoWidth;
-        offscreenCanvas.height = hiddenVideo.videoHeight;
-        offscreenContext = offscreenCanvas.getContext('2d');
-    }
-
-    // Check if video is ready
-    if (hiddenVideo.readyState < 2) {
-        console.warn('Video not ready yet, skipping screenshot');
+    let dimensions;
+    try {
+        dimensions = await drawCaptureFrame(1280);
+    } catch (error) {
+        console.error('Failed to capture manual screenshot:', error);
+        cheatingDaddy.addNewResponse(`Screenshot error: ${error.message}`);
         return;
     }
 
-    // Downscale to max 1280px wide for faster transfer — vision models don't need 4K
-    const MAX_WIDTH = 1280;
-    const srcW = hiddenVideo.videoWidth;
-    const srcH = hiddenVideo.videoHeight;
-    let destW = srcW;
-    let destH = srcH;
-    if (srcW > MAX_WIDTH) {
-        destW = MAX_WIDTH;
-        destH = Math.round(srcH * (MAX_WIDTH / srcW));
-    }
-    offscreenCanvas.width = destW;
-    offscreenCanvas.height = destH;
-    offscreenContext.drawImage(hiddenVideo, 0, 0, destW, destH);
+    const { width: destW, height: destH } = dimensions;
 
     let qualityValue;
     switch (quality) {
