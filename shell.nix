@@ -24,6 +24,7 @@ pkgs.mkShell {
         nspr
         nss
         pango
+        pipewire
         xorg.libX11
         xorg.libXcomposite
         xorg.libXdamage
@@ -32,4 +33,6 @@ pkgs.mkShell {
         xorg.libXrandr
         xorg.libxcb
     ]);
+
+    NIXOS_OZONE_WL = "1";
 }
