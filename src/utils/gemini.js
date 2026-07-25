@@ -3,7 +3,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
-const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, incrementCharUsage, getConfig } = require('../storage');
+const { getApiKey, getGroqApiKey, incrementCharUsage, getConfig } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 const { startTransportLog, logTransportEvent, closeTransportLog } = require('./transportLogger');
 
@@ -994,8 +994,7 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
 }
 
 async function sendImageToGeminiHttp(base64Data, prompt) {
-    // Get available model based on rate limits
-    const model = getAvailableModel();
+    const model = getConfig().geminiConversationModel;
 
     const apiKey = getApiKey();
     if (!apiKey) {
@@ -1020,9 +1019,6 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
             model: model,
             contents: contents,
         });
-
-        // Increment count after successful call
-        incrementLimitCount(model);
 
         // Stream the response
         let fullText = '';

@@ -10,6 +10,7 @@ const DEFAULT_CONFIG = {
     onboarded: false,
     layout: 'normal',
     geminiLiveModel: 'gemini-3.1-flash-live-preview',
+    geminiConversationModel: 'gemini-3-flash-preview',
     groqModel: 'qwen/qwen3.6-27b',
     groqImageModel: 'qwen/qwen3.6-27b',
     disableGroqThinking: true,
