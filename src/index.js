@@ -2,7 +2,7 @@ if (require('electron-squirrel-startup')) {
     process.exit(0);
 }
 
-const { app, BrowserWindow, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, desktopCapturer, screen } = require('electron');
 const { createWindow, updateGlobalShortcuts } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
 const storage = require('./storage');
@@ -281,6 +281,29 @@ function setupGeneralIpcHandlers() {
             return { success: true };
         } catch (error) {
             console.error('Error opening external URL:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('capture-screen-thumbnail', async (event, maxWidth = 1280) => {
+        try {
+            const safeMaxWidth = Number.isInteger(maxWidth) ? Math.max(320, Math.min(maxWidth, 2560)) : 1280;
+            const display = screen.getPrimaryDisplay();
+            const scale = Math.min(1, safeMaxWidth / display.size.width);
+            const thumbnailSize = {
+                width: Math.round(display.size.width * scale),
+                height: Math.round(display.size.height * scale),
+            };
+            const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize });
+            const source = sources.find(candidate => candidate.display_id === String(display.id)) || sources[0];
+            if (!source || source.thumbnail.isEmpty()) throw new Error('desktopCapturer returned no screen thumbnail');
+
+            console.log(
+                `[Screen Capture][desktopCapturer] Source "${source.name}" display=${source.display_id} size=${source.thumbnail.getSize().width}x${source.thumbnail.getSize().height}`
+            );
+            return { success: true, dataUrl: source.thumbnail.toDataURL() };
+        } catch (error) {
+            console.error('[Screen Capture][desktopCapturer] Failed:', error);
             return { success: false, error: error.message };
         }
     });

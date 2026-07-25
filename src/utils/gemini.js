@@ -300,7 +300,7 @@ async function sendToGroq(transcription) {
     const modelToUse = config.openaiCompatibleModel || config.groqModel;
     const endpoint = getOpenAICompatibleEndpoint(config.openaiCompatibleBaseUrl);
 
-    console.log(`Sending to OpenAI-compatible provider (${modelToUse}):`, transcription.substring(0, 100) + '...');
+    console.log(`[OpenAI Compatible][${modelToUse}][${endpoint}] Sending text:`, transcription.substring(0, 100) + '...');
     logTransportEvent('groq.text.request', {
         model: modelToUse,
         transcription,
@@ -334,7 +334,7 @@ async function sendToGroq(transcription) {
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error('OpenAI-compatible API error:', response.status, errorText);
+            console.error(`[OpenAI Compatible][${modelToUse}][${endpoint}] HTTP ${response.status}:`, errorText);
             logTransportEvent('groq.text.http_error', {
                 status: response.status,
                 body: errorText,
@@ -425,7 +425,7 @@ async function sendToGroq(transcription) {
         console.log(`Provider response completed (${modelToUse})`);
         sendToRenderer('update-status', 'Listening...');
     } catch (error) {
-        console.error('Error calling OpenAI-compatible API:', error);
+        console.error(`[OpenAI Compatible][${modelToUse}][${endpoint}] Request failed:`, error);
         logTransportEvent('groq.text.error', {
             error: error.message,
             stack: error.stack,
@@ -439,6 +439,8 @@ async function sendImageToGroq(base64Data, prompt) {
     const config = getConfig();
     const model = config.openaiCompatibleImageModel || config.groqImageModel;
     const endpoint = getOpenAICompatibleEndpoint(config.openaiCompatibleBaseUrl);
+
+    console.log(`[OpenAI Compatible][${model}][${endpoint}] Sending image (${Buffer.byteLength(base64Data, 'base64')} bytes)`);
 
     logTransportEvent('groq.image.request', {
         model,
@@ -479,7 +481,7 @@ async function sendImageToGroq(base64Data, prompt) {
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error('OpenAI-compatible image API error:', response.status, errorText);
+            console.error(`[OpenAI Compatible][${model}][${endpoint}] Image HTTP ${response.status}:`, errorText);
             logTransportEvent('groq.image.http_error', {
                 status: response.status,
                 body: errorText,
@@ -550,7 +552,7 @@ async function sendImageToGroq(base64Data, prompt) {
         });
         return { success: true, text: cleanedResponse, model };
     } catch (error) {
-        console.error('Error calling OpenAI-compatible image API:', error);
+        console.error(`[OpenAI Compatible][${model}][${endpoint}] Image request failed:`, error);
         logTransportEvent('groq.image.error', {
             error: error.message,
             stack: error.stack,
@@ -641,8 +643,9 @@ async function sendToGemma(transcription) {
 }
 
 async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'interview', language = 'en-US', isReconnect = false) {
+    const liveModel = getConfig().geminiLiveModel;
     if (isInitializingSession) {
-        console.log('Session initialization already in progress');
+        console.log(`[Gemini Live][${liveModel}] Session initialization already in progress`);
         return false;
     }
 
@@ -676,11 +679,13 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
     }
 
     try {
+        console.log(`[Gemini Live][${liveModel}] ${isReconnect ? 'Reconnecting' : 'Connecting'} profile=${profile} language=${language}`);
         const session = await client.live.connect({
-            model: getConfig().geminiLiveModel,
+            model: liveModel,
             callbacks: {
                 onopen: function () {
-                    logTransportEvent('gemini.live.opened', {});
+                    console.log(`[Gemini Live][${liveModel}] Connected`);
+                    logTransportEvent('gemini.live.opened', { model: liveModel });
                     sendToRenderer('update-status', 'Live session connected');
                 },
                 onmessage: function (message) {
@@ -725,16 +730,21 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                     }
                 },
                 onerror: function (e) {
-                    console.log('Session error:', e.message);
+                    console.error(`[Gemini Live][${liveModel}] Session error:`, e.message);
                     logTransportEvent('gemini.live.error', {
+                        model: liveModel,
                         error: e.message,
                     });
                     sendToRenderer('update-status', 'Error: ' + e.message);
                 },
                 onclose: function (e) {
-                    console.log('Session closed:', e.reason);
+                    const reason = e.reason || 'No close reason provided';
+                    const quotaExceeded = /quota|billing|resource_exhausted/i.test(reason);
+                    console.log(`[Gemini Live][${liveModel}] Session closed: ${reason}`);
                     logTransportEvent('gemini.live.closed', {
-                        reason: e.reason,
+                        model: liveModel,
+                        reason,
+                        quotaExceeded,
                     });
 
                     // Don't reconnect if user intentionally closed
@@ -742,6 +752,16 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                         isUserClosing = false;
                         closeTransportLog();
                         sendToRenderer('update-status', 'Session closed');
+                        return;
+                    }
+
+                    if (quotaExceeded) {
+                        console.error(`[Gemini Live][${liveModel}] Quota exceeded; reconnect disabled because retrying cannot restore quota`);
+                        closeTransportLog();
+                        sendToRenderer('update-status', `Gemini Live quota exceeded (${liveModel})`);
+                        sendToRenderer('reconnect-failed', {
+                            message: `Gemini Live model ${liveModel} exceeded its quota. Change Gemini Live Model or check Google AI billing.`,
+                        });
                         return;
                     }
 
@@ -779,7 +799,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
         }
         return session;
     } catch (error) {
-        console.error('Failed to initialize Gemini session:', error);
+        console.error(`[Gemini Live][${liveModel}] Failed to initialize session:`, error);
         isInitializingSession = false;
         if (!isReconnect) {
             sendToRenderer('session-initializing', false);
@@ -790,7 +810,8 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
 
 async function attemptReconnect() {
     reconnectAttempts++;
-    console.log(`Reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
+    const liveModel = getConfig().geminiLiveModel;
+    console.log(`[Gemini Live][${liveModel}] Reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
 
     // Clear stale buffers
     messageBuffer = '';
@@ -818,21 +839,21 @@ async function attemptReconnect() {
             const contextMessage = buildContextMessage();
             if (contextMessage) {
                 try {
-                    console.log('Restoring conversation context...');
+                    console.log(`[Gemini Live][${liveModel}] Restoring conversation context`);
                     await session.sendRealtimeInput({ text: contextMessage });
                 } catch (contextError) {
-                    console.error('Failed to restore context:', contextError);
+                    console.error(`[Gemini Live][${liveModel}] Failed to restore context:`, contextError);
                     // Continue without context - better than failing
                 }
             }
 
             // Don't reset reconnectAttempts here - let it reset on next fresh session
             sendToRenderer('update-status', 'Reconnected! Listening...');
-            console.log('Session reconnected successfully');
+            console.log(`[Gemini Live][${liveModel}] Session reconnected successfully`);
             return true;
         }
     } catch (error) {
-        console.error(`Reconnection attempt ${reconnectAttempts} failed:`, error);
+        console.error(`[Gemini Live][${liveModel}] Reconnection attempt ${reconnectAttempts} failed:`, error);
     }
 
     // If we still have attempts left, try again
@@ -841,7 +862,7 @@ async function attemptReconnect() {
     }
 
     // Max attempts reached - notify frontend
-    console.log('Max reconnection attempts reached');
+    console.log(`[Gemini Live][${liveModel}] Max reconnection attempts reached`);
     sendToRenderer('reconnect-failed', {
         message: 'Tried 3 times to reconnect. Must be upstream/network issues. Try restarting or download updated app from site.',
     });
@@ -1028,7 +1049,7 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
             { text: prompt },
         ];
 
-        console.log(`Sending image to ${model} (streaming)...`);
+        console.log(`[Gemini HTTP][${model}] Sending image (${Buffer.byteLength(base64Data, 'base64')} bytes, streaming)`);
         const response = await ai.models.generateContentStream({
             model: model,
             contents: contents,
@@ -1047,14 +1068,14 @@ async function sendImageToGeminiHttp(base64Data, prompt) {
             }
         }
 
-        console.log(`Image response completed from ${model}`);
+        console.log(`[Gemini HTTP][${model}] Image response completed`);
 
         // Save screen analysis to history
         saveScreenAnalysis(prompt, fullText, model);
 
         return { success: true, text: fullText, model: model };
     } catch (error) {
-        console.error('Error sending image to Gemini HTTP:', error);
+        console.error(`[Gemini HTTP][${model}] Image request failed:`, error);
         return { success: false, error: error.message };
     }
 }

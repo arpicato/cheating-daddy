@@ -509,10 +509,34 @@ async function initializeVideoCapture() {
     offscreenContext = offscreenCanvas.getContext('2d', { willReadFrequently: true });
 }
 
+async function drawDesktopCapturerFallback(maxWidth) {
+    const result = await ipcRenderer.invoke('capture-screen-thumbnail', maxWidth || 1280);
+    if (!result.success) throw new Error(result.error);
+
+    const image = new Image();
+    image.src = result.dataUrl;
+    await image.decode();
+    offscreenCanvas.width = image.naturalWidth;
+    offscreenCanvas.height = image.naturalHeight;
+    offscreenContext.drawImage(image, 0, 0);
+
+    if (isCanvasBlack(offscreenCanvas)) throw new Error('desktopCapturer thumbnail is completely black');
+
+    console.log(`[Screen Capture] desktopCapturer fallback valid: ${image.naturalWidth}x${image.naturalHeight}`);
+    return { width: image.naturalWidth, height: image.naturalHeight };
+}
+
 async function drawCaptureFrame(maxWidth = null) {
     await initializeVideoCapture();
     const videoTrack = mediaStream.getVideoTracks()[0];
     if (!videoTrack || videoTrack.readyState !== 'live') throw new Error('Screen capture track is not live');
+
+    console.log('[Screen Capture] Capturing frame', {
+        label: videoTrack.label,
+        readyState: videoTrack.readyState,
+        settings: videoTrack.getSettings(),
+        videoSize: `${hiddenVideo.videoWidth}x${hiddenVideo.videoHeight}`,
+    });
 
     for (let attempt = 1; attempt <= 3; attempt++) {
         let frame = hiddenVideo;
@@ -524,8 +548,9 @@ async function drawCaptureFrame(maxWidth = null) {
             try {
                 bitmap = await new ImageCapture(videoTrack).grabFrame();
                 frame = bitmap;
+                console.log(`[Screen Capture] ImageCapture frame ${attempt}: ${bitmap.width}x${bitmap.height}`);
             } catch (error) {
-                console.warn(`ImageCapture attempt ${attempt} failed, using video frame:`, error);
+                console.warn(`[Screen Capture] ImageCapture attempt ${attempt} failed, using video frame:`, error);
                 await waitForVideoFrame(hiddenVideo);
             }
         } else {
@@ -547,13 +572,21 @@ async function drawCaptureFrame(maxWidth = null) {
         offscreenContext.drawImage(frame, 0, 0, destW, destH);
         bitmap?.close();
 
-        if (!isCanvasBlack(offscreenCanvas)) return { width: destW, height: destH };
+        if (!isCanvasBlack(offscreenCanvas)) {
+            console.log(`[Screen Capture] Valid frame: ${destW}x${destH}`);
+            return { width: destW, height: destH };
+        }
 
-        console.warn(`Captured frame ${attempt}/3 is completely black`);
+        console.warn(`[Screen Capture] Frame ${attempt}/3 is completely black (${destW}x${destH})`);
         await new Promise(resolve => setTimeout(resolve, 250));
     }
 
-    throw new Error('Screen capture is completely black. Check screen-sharing permission and Electron graphics libraries.');
+    console.warn('[Screen Capture] WebRTC frames stayed black; trying desktopCapturer fallback');
+    try {
+        return await drawDesktopCapturerFallback(maxWidth);
+    } catch (error) {
+        throw new Error(`All screen capture methods returned black frames. ${error.message}`);
+    }
 }
 
 async function captureScreenshot(imageQuality = 'medium', isManual = false) {
