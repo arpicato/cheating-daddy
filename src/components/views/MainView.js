@@ -699,6 +699,7 @@ export class MainView extends LitElement {
         _groqKey: { state: true },
         _openaiKey: { state: true },
         _geminiLiveModel: { state: true },
+        _geminiConversationModel: { state: true },
         _groqModel: { state: true },
         _groqImageModel: { state: true },
         _disableGroqThinking: { state: true },
@@ -728,6 +729,7 @@ export class MainView extends LitElement {
         this._groqKey = '';
         this._openaiKey = '';
         this._geminiLiveModel = 'gemini-3.1-flash-live-preview';
+        this._geminiConversationModel = 'gemini-3-flash-preview';
         this._groqModel = 'qwen/qwen3.6-27b';
         this._groqImageModel = 'qwen/qwen3.6-27b';
         this._disableGroqThinking = true;
@@ -768,6 +770,7 @@ export class MainView extends LitElement {
             this._groqKey = (await cheatingDaddy.storage.getGroqApiKey().catch(() => '')) || '';
             this._openaiKey = creds.openaiKey || '';
             this._geminiLiveModel = config.geminiLiveModel || 'gemini-3.1-flash-live-preview';
+            this._geminiConversationModel = config.geminiConversationModel || 'gemini-3-flash-preview';
             this._groqModel = config.groqModel || 'qwen/qwen3.6-27b';
             this._groqImageModel = config.groqImageModel || 'qwen/qwen3.6-27b';
             this._disableGroqThinking = config.disableGroqThinking === true;
@@ -948,6 +951,12 @@ export class MainView extends LitElement {
     async _saveGeminiLiveModel(val) {
         this._geminiLiveModel = val;
         await cheatingDaddy.storage.updateConfig('geminiLiveModel', val);
+        this.requestUpdate();
+    }
+
+    async _saveGeminiConversationModel(val) {
+        this._geminiConversationModel = val;
+        await cheatingDaddy.storage.updateConfig('geminiConversationModel', val);
         this.requestUpdate();
     }
 
@@ -1184,6 +1193,12 @@ export class MainView extends LitElement {
                     <div class="form-group">
                         <label class="form-label">Gemini Live Model</label>
                         <input type="text" .value=${this._geminiLiveModel} @input=${e => this._saveGeminiLiveModel(e.target.value)} />
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Gemini Conversation Model</label>
+                        <input type="text" .value=${this._geminiConversationModel} @input=${e => this._saveGeminiConversationModel(e.target.value)} />
+                        <div class="form-hint">Used for screen analysis when no Groq key is configured.</div>
                     </div>
                 </div>
             </details>
