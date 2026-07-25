@@ -699,6 +699,7 @@ export class MainView extends LitElement {
         _groqKey: { state: true },
         _openaiKey: { state: true },
         _geminiLiveModel: { state: true },
+        _openaiCompatibleBaseUrl: { state: true },
         _groqModel: { state: true },
         _groqImageModel: { state: true },
         _disableGroqThinking: { state: true },
@@ -728,6 +729,7 @@ export class MainView extends LitElement {
         this._groqKey = '';
         this._openaiKey = '';
         this._geminiLiveModel = 'gemini-3.1-flash-live-preview';
+        this._openaiCompatibleBaseUrl = 'https://api.groq.com/openai/v1';
         this._groqModel = 'qwen/qwen3.6-27b';
         this._groqImageModel = 'qwen/qwen3.6-27b';
         this._disableGroqThinking = true;
@@ -765,11 +767,12 @@ export class MainView extends LitElement {
             // Load keys
             this._token = creds.cloudToken || '';
             this._geminiKey = (await cheatingDaddy.storage.getApiKey().catch(() => '')) || '';
-            this._groqKey = (await cheatingDaddy.storage.getGroqApiKey().catch(() => '')) || '';
+            this._groqKey = creds.openaiCompatibleApiKey || creds.groqApiKey || '';
             this._openaiKey = creds.openaiKey || '';
             this._geminiLiveModel = config.geminiLiveModel || 'gemini-3.1-flash-live-preview';
-            this._groqModel = config.groqModel || 'qwen/qwen3.6-27b';
-            this._groqImageModel = config.groqImageModel || 'qwen/qwen3.6-27b';
+            this._openaiCompatibleBaseUrl = config.openaiCompatibleBaseUrl || 'https://api.groq.com/openai/v1';
+            this._groqModel = config.openaiCompatibleModel || config.groqModel || 'qwen/qwen3.6-27b';
+            this._groqImageModel = config.openaiCompatibleImageModel || config.groqImageModel || 'qwen/qwen3.6-27b';
             this._disableGroqThinking = config.disableGroqThinking === true;
 
             // Load local AI settings
@@ -941,7 +944,14 @@ export class MainView extends LitElement {
 
     async _saveGroqKey(val) {
         this._groqKey = val;
-        await cheatingDaddy.storage.setGroqApiKey(val);
+        const creds = await cheatingDaddy.storage.getCredentials().catch(() => ({}));
+        await cheatingDaddy.storage.setCredentials({ ...creds, openaiCompatibleApiKey: val });
+        this.requestUpdate();
+    }
+
+    async _saveOpenAICompatibleBaseUrl(val) {
+        this._openaiCompatibleBaseUrl = val;
+        await cheatingDaddy.storage.updateConfig('openaiCompatibleBaseUrl', val);
         this.requestUpdate();
     }
 
@@ -953,13 +963,13 @@ export class MainView extends LitElement {
 
     async _saveGroqModel(val) {
         this._groqModel = val;
-        await cheatingDaddy.storage.updateConfig('groqModel', val);
+        await cheatingDaddy.storage.updateConfig('openaiCompatibleModel', val);
         this.requestUpdate();
     }
 
     async _saveGroqImageModel(val) {
         this._groqImageModel = val;
-        await cheatingDaddy.storage.updateConfig('groqImageModel', val);
+        await cheatingDaddy.storage.updateConfig('openaiCompatibleImageModel', val);
         this.requestUpdate();
     }
 
@@ -1192,26 +1202,33 @@ export class MainView extends LitElement {
                 <summary class="config-summary">
                     <span class="config-summary-text">
                         <span class="config-summary-title">AI responses</span>
-                        <span class="config-summary-description">Groq key and response model</span>
+                        <span class="config-summary-description">OpenAI-compatible endpoint and models</span>
                     </span>
                     ${this._renderConfigChevron()}
                 </summary>
                 <div class="config-content">
                     <div class="form-group">
-                        <label class="form-label">Groq API Key</label>
+                        <label class="form-label">API Key</label>
                         <input type="password" placeholder="Optional" .value=${this._groqKey} @input=${e => this._saveGroqKey(e.target.value)} />
-                        <div class="form-hint">
-                            <span class="link" @click=${() => this.onExternalLink('https://console.groq.com/keys')}>Get Groq key</span>
-                        </div>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Groq Model</label>
+                        <label class="form-label">Base URL</label>
+                        <input
+                            type="url"
+                            placeholder="https://api.example.com/v1"
+                            .value=${this._openaiCompatibleBaseUrl}
+                            @input=${e => this._saveOpenAICompatibleBaseUrl(e.target.value)}
+                        />
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Model</label>
                         <input type="text" .value=${this._groqModel} @input=${e => this._saveGroqModel(e.target.value)} />
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Groq Image Model</label>
+                        <label class="form-label">Image Model</label>
                         <input type="text" .value=${this._groqImageModel} @input=${e => this._saveGroqImageModel(e.target.value)} />
                     </div>
 
@@ -1223,12 +1240,12 @@ export class MainView extends LitElement {
                         />
                         <span class="config-checkbox-text">
                             <span class="config-summary-title">Disable thinking</span>
-                            <span class="config-summary-description">Faster responses with less internal reasoning</span>
+                            <span class="config-summary-description">Groq endpoints only; faster responses with less internal reasoning</span>
                         </span>
                     </label>
 
                     <div class="config-note">
-                        If the Groq API key is empty, Gemini Live is used for answers instead. Its answer quality may be lower.
+                        Supports OpenAI-compatible chat completion APIs. If API key is empty, Gemini Live is used for answers instead.
                     </div>
                 </div>
             </details>
