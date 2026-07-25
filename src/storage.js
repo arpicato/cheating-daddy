@@ -11,6 +11,9 @@ const DEFAULT_CONFIG = {
     layout: 'normal',
     geminiLiveModel: 'gemini-3.1-flash-live-preview',
     geminiConversationModel: 'gemini-3-flash-preview',
+    openaiCompatibleBaseUrl: 'https://api.groq.com/openai/v1',
+    openaiCompatibleModel: 'qwen/qwen3.6-27b',
+    openaiCompatibleImageModel: 'qwen/qwen3.6-27b',
     groqModel: 'qwen/qwen3.6-27b',
     groqImageModel: 'qwen/qwen3.6-27b',
     disableGroqThinking: true,
@@ -18,6 +21,7 @@ const DEFAULT_CONFIG = {
 
 const DEFAULT_CREDENTIALS = {
     apiKey: '',
+    openaiCompatibleApiKey: '',
     groqApiKey: '',
 };
 
@@ -167,7 +171,12 @@ function initializeStorage() {
 
 function getConfig() {
     const saved = readJsonFile(getConfigPath(), {});
-    return { ...DEFAULT_CONFIG, ...saved };
+    return {
+        ...DEFAULT_CONFIG,
+        ...saved,
+        openaiCompatibleModel: saved.openaiCompatibleModel || saved.groqModel || DEFAULT_CONFIG.openaiCompatibleModel,
+        openaiCompatibleImageModel: saved.openaiCompatibleImageModel || saved.groqImageModel || DEFAULT_CONFIG.openaiCompatibleImageModel,
+    };
 }
 
 function setConfig(config) {
@@ -208,6 +217,15 @@ function getGroqApiKey() {
 
 function setGroqApiKey(groqApiKey) {
     return setCredentials({ groqApiKey });
+}
+
+function getOpenAICompatibleApiKey() {
+    const credentials = getCredentials();
+    return credentials.openaiCompatibleApiKey || credentials.groqApiKey || '';
+}
+
+function setOpenAICompatibleApiKey(openaiCompatibleApiKey) {
+    return setCredentials({ openaiCompatibleApiKey });
 }
 
 // ============ PREFERENCES ============
@@ -514,6 +532,8 @@ module.exports = {
     setApiKey,
     getGroqApiKey,
     setGroqApiKey,
+    getOpenAICompatibleApiKey,
+    setOpenAICompatibleApiKey,
 
     // Preferences
     getPreferences,

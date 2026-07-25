@@ -3,7 +3,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
-const { getApiKey, getGroqApiKey, incrementCharUsage, getConfig } = require('../storage');
+const { getApiKey, getOpenAICompatibleApiKey, incrementCharUsage, getConfig } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 const { startTransportLog, logTransportEvent, closeTransportLog } = require('./transportLogger');
 
@@ -49,8 +49,7 @@ let messageBuffer = '';
 let groqRequestStartedForTurn = false;
 
 const GROQ_MAX_COMPLETION_TOKENS = 16384;
-const GROQ_EMPTY_RESPONSE_MESSAGE =
-    'Groq reached the maximum completion-token limit before returning a final answer. Disable thinking in Home → AI responses and try again.';
+const GROQ_EMPTY_RESPONSE_MESSAGE = 'Provider returned no final answer. If using Groq, disable thinking in Home → AI responses and try again.';
 
 // Reconnection variables
 let isUserClosing = false;
@@ -207,7 +206,7 @@ async function getStoredSetting(key, defaultValue) {
 
 // helper to check if groq has been configured
 function hasGroqKey() {
-    const key = getGroqApiKey();
+    const key = getOpenAICompatibleApiKey();
     return key && key.trim() != '';
 }
 
@@ -250,6 +249,19 @@ function stripThinkingTags(text) {
     return text.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '').trim();
 }
 
+function getOpenAICompatibleEndpoint(baseUrl) {
+    const normalizedBaseUrl = (baseUrl || 'https://api.groq.com/openai/v1').trim().replace(/\/+$/, '');
+    return normalizedBaseUrl.endsWith('/chat/completions') ? normalizedBaseUrl : `${normalizedBaseUrl}/chat/completions`;
+}
+
+function isGroqEndpoint(endpoint) {
+    try {
+        return new URL(endpoint).hostname === 'api.groq.com';
+    } catch {
+        return false;
+    }
+}
+
 function getGroqReasoningOptions(model, disableThinking) {
     if (model.includes('qwen3')) {
         const options = {
@@ -273,9 +285,9 @@ function getGroqReasoningOptions(model, disableThinking) {
 }
 
 async function sendToGroq(transcription) {
-    const groqApiKey = getGroqApiKey();
+    const groqApiKey = getOpenAICompatibleApiKey();
     if (!groqApiKey) {
-        console.log('No Groq API key configured, skipping Groq response');
+        console.log('No OpenAI-compatible API key configured, skipping response');
         return;
     }
 
@@ -285,9 +297,10 @@ async function sendToGroq(transcription) {
     }
 
     const config = getConfig();
-    const modelToUse = config.groqModel;
+    const modelToUse = config.openaiCompatibleModel || config.groqModel;
+    const endpoint = getOpenAICompatibleEndpoint(config.openaiCompatibleBaseUrl);
 
-    console.log(`Sending to Groq (${modelToUse}):`, transcription.substring(0, 100) + '...');
+    console.log(`Sending to OpenAI-compatible provider (${modelToUse}):`, transcription.substring(0, 100) + '...');
     logTransportEvent('groq.text.request', {
         model: modelToUse,
         transcription,
@@ -303,7 +316,7 @@ async function sendToGroq(transcription) {
     }
 
     try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const response = await fetch(endpoint, {
             method: 'POST',
             headers: {
                 Authorization: `Bearer ${groqApiKey}`,
@@ -314,19 +327,19 @@ async function sendToGroq(transcription) {
                 messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...groqConversationHistory],
                 stream: true,
                 temperature: 0.7,
-                max_completion_tokens: GROQ_MAX_COMPLETION_TOKENS,
-                ...getGroqReasoningOptions(modelToUse, config.disableGroqThinking),
+                ...(isGroqEndpoint(endpoint) ? { max_completion_tokens: GROQ_MAX_COMPLETION_TOKENS } : {}),
+                ...(isGroqEndpoint(endpoint) ? getGroqReasoningOptions(modelToUse, config.disableGroqThinking) : {}),
             }),
         });
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error('Groq API error:', response.status, errorText);
+            console.error('OpenAI-compatible API error:', response.status, errorText);
             logTransportEvent('groq.text.http_error', {
                 status: response.status,
                 body: errorText,
             });
-            sendToRenderer('update-status', `Groq error: ${response.status}`);
+            sendToRenderer('update-status', `Provider error: ${response.status}`);
             return;
         }
 
@@ -394,14 +407,14 @@ async function sendToGroq(transcription) {
 
             saveConversationTurn(transcription, cleanedResponse);
         } else {
-            console.warn(`Groq returned no final answer (${modelToUse})`);
+            console.warn(`Provider returned no final answer (${modelToUse})`);
             logTransportEvent('groq.text.empty_response', {
                 model: modelToUse,
                 fullText,
                 finishReason,
             });
             sendToRenderer('new-response', GROQ_EMPTY_RESPONSE_MESSAGE);
-            sendToRenderer('update-status', 'Groq reached the completion-token limit');
+            sendToRenderer('update-status', 'Provider returned no final answer');
             return;
         }
 
@@ -409,22 +422,23 @@ async function sendToGroq(transcription) {
             model: modelToUse,
             response: cleanedResponse,
         });
-        console.log(`Groq response completed (${modelToUse})`);
+        console.log(`Provider response completed (${modelToUse})`);
         sendToRenderer('update-status', 'Listening...');
     } catch (error) {
-        console.error('Error calling Groq API:', error);
+        console.error('Error calling OpenAI-compatible API:', error);
         logTransportEvent('groq.text.error', {
             error: error.message,
             stack: error.stack,
         });
-        sendToRenderer('update-status', 'Groq error: ' + error.message);
+        sendToRenderer('update-status', 'Provider error: ' + error.message);
     }
 }
 
 async function sendImageToGroq(base64Data, prompt) {
-    const groqApiKey = getGroqApiKey();
+    const groqApiKey = getOpenAICompatibleApiKey();
     const config = getConfig();
-    const model = config.groqImageModel;
+    const model = config.openaiCompatibleImageModel || config.groqImageModel;
+    const endpoint = getOpenAICompatibleEndpoint(config.openaiCompatibleBaseUrl);
 
     logTransportEvent('groq.image.request', {
         model,
@@ -433,7 +447,7 @@ async function sendImageToGroq(base64Data, prompt) {
     });
 
     try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const response = await fetch(endpoint, {
             method: 'POST',
             headers: {
                 Authorization: `Bearer ${groqApiKey}`,
@@ -458,19 +472,19 @@ async function sendImageToGroq(base64Data, prompt) {
                 ],
                 stream: true,
                 temperature: 0.7,
-                max_completion_tokens: GROQ_MAX_COMPLETION_TOKENS,
-                ...getGroqReasoningOptions(model, config.disableGroqThinking),
+                ...(isGroqEndpoint(endpoint) ? { max_completion_tokens: GROQ_MAX_COMPLETION_TOKENS } : {}),
+                ...(isGroqEndpoint(endpoint) ? getGroqReasoningOptions(model, config.disableGroqThinking) : {}),
             }),
         });
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error('Groq image API error:', response.status, errorText);
+            console.error('OpenAI-compatible image API error:', response.status, errorText);
             logTransportEvent('groq.image.http_error', {
                 status: response.status,
                 body: errorText,
             });
-            return { success: false, error: `Groq error: ${response.status}` };
+            return { success: false, error: `Provider error: ${response.status}` };
         }
 
         logTransportEvent('groq.image.http_response', {
@@ -536,7 +550,7 @@ async function sendImageToGroq(base64Data, prompt) {
         });
         return { success: true, text: cleanedResponse, model };
     } catch (error) {
-        console.error('Error calling Groq image API:', error);
+        console.error('Error calling OpenAI-compatible image API:', error);
         logTransportEvent('groq.image.error', {
             error: error.message,
             stack: error.stack,
