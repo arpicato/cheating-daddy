@@ -31,6 +31,16 @@ A real-time AI assistant that provides contextual help during video calls, inter
 2. **Install Dependencies**: `npm install`
 3. **Run the App**: `npm start`
 
+### NixOS
+
+Enter the included development shell before installing dependencies or starting Electron:
+
+```sh
+nix-shell
+npm install
+npm start
+```
+
 ## Usage
 
 1. Enter your Gemini API key in the main window
